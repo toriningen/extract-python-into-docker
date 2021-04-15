@@ -8,6 +8,28 @@ FROM python:3 AS builder
 COPY app/requirements.txt /work/src/
 RUN pip install -r /work/src/requirements.txt --target /work/libs
 
+RUN { \
+      ldd "$(which python3)"; \
+      find /work/libs \
+        -type f \
+        -exec bash -c "readelf -h '{}' &>/dev/null" ';' \
+        -execdir 'ldd' '{}' ';' \
+      ; \
+    } \
+      | sed -E 's/^[^\t].*?$//; \
+                s/\(0x[0-9a-f]+\)$//; \
+                s/^\s+//; s/^.*?=> //; \
+                s/^linux-vdso.*$//; \
+                s/^not found$//; \
+                s/^not a dynamic executable$//; \
+                s@^.*?/ld-linux.*?@@; \
+                /^$/d' \
+      | xargs realpath -ms -- \
+      | grep -v '^/work/' \
+      | sed -E 's@^(.*)$@COPY --from=builder \1 /runtime/lib/@' \
+      | sort \
+      | uniq
+
 ####
 FROM scratch AS app-base
 COPY --from=builder /lib64/ld-linux-x86-64.so.2 /lib64/
@@ -16,25 +38,6 @@ COPY --from=builder /usr/local/lib/python3.9 /runtime/lib/python3.9
 # python будет искать свою стандартную библиотеку в $PYTHONHOME/lib/python3.9
 ENV PYTHONHOME="/runtime"
 
-# Чтобы собрать список динамических либ:
-#     {
-#       ldd "$(which python3)";
-#       find /work/libs \
-#         -type f \
-#         -exec bash -c "readelf -h '{}' &>/dev/null" ';' \
-#         -execdir 'ldd' '{}' ';' \
-#       ; \
-#     } \
-#       | sed -E \
-#         's/^[^\t].*?$//;
-#          s/\(0x[0-9a-f]+\)$//;
-#          s/^\s+//; s/^.*?=> //;
-#          s/^linux-vdso.*$//;
-#          s/^not found$//;
-#          s/^not a dynamic executable$//;
-#          s@^/work/.*?$@@' \
-#       | sort \
-#       | uniq;
 COPY --from=builder /lib/x86_64-linux-gnu/libc.so.6 /runtime/lib/
 COPY --from=builder /lib/x86_64-linux-gnu/libcrypt.so.1 /runtime/lib/
 COPY --from=builder /lib/x86_64-linux-gnu/libdl.so.2 /runtime/lib/
